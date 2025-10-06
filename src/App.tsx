@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Sidebar } from './components/Layout/Sidebar';
 import { Header } from './components/Layout/Header';
 import { DashboardView } from './components/Dashboard/DashboardView';
@@ -10,20 +10,32 @@ import { TripsView } from './components/Trips/TripsView';
 import { SettingsView } from './components/Settings/SettingsView';
 import { AdminView } from './components/Admin/AdminView';
 import { FleetMapView } from './components/Map/FleetMapView';
-import { 
-  mockDevices, 
-  mockDrivers, 
-  mockVehicles, 
-  mockTrips, 
-  mockAlerts, 
-  mockGeofences 
+import { LoginView } from './components/Auth/LoginView';
+import {
+  mockDevices,
+  mockDrivers,
+  mockVehicles,
+  mockTrips,
+  mockAlerts,
+  mockGeofences,
 } from './data/mockData';
+import { mockAuthUsers } from './data/authUsers';
 import { Alert } from './types';
+import { AuthRole, AuthUser, LoginCredentials, SessionUser } from './types/auth';
+
+const viewPermissions: Record<AuthRole, string[]> = {
+  super_admin: ['dashboard', 'map', 'vehicles', 'drivers', 'geofences', 'alerts', 'trips', 'admin', 'settings'],
+  master_admin: ['dashboard', 'map', 'vehicles', 'drivers', 'geofences', 'alerts', 'trips', 'admin', 'settings'],
+  child_user: ['dashboard', 'map', 'vehicles', 'drivers', 'geofences', 'alerts', 'trips', 'settings'],
+};
 
 function App() {
   const [activeView, setActiveView] = useState('dashboard');
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [alerts, setAlerts] = useState<Alert[]>(mockAlerts);
+  const [authUsers, setAuthUsers] = useState<AuthUser[]>(mockAuthUsers);
+  const [currentUser, setCurrentUser] = useState<SessionUser | null>(null);
+  const [loginError, setLoginError] = useState<string | null>(null);
 
   // Simulate real-time updates
   useEffect(() => {
@@ -31,42 +43,84 @@ function App() {
       // In a real implementation, this would be WebSocket connections
       console.log('Real-time data update simulation');
     }, 10000);
-    
+
     return () => clearInterval(interval);
   }, []);
 
-  const currentUser = {
-    name: 'Carlos Mendes',
-    email: 'carlos.mendes@empresa.com',
-    role: 'manager'
+  useEffect(() => {
+    if (!currentUser) {
+      return;
+    }
+
+    const allowedViews = viewPermissions[currentUser.role];
+    if (!allowedViews.includes(activeView)) {
+      setActiveView(allowedViews[0]);
+    }
+  }, [currentUser, activeView]);
+
+  const pendingAlerts = useMemo(
+    () => alerts.filter(alert => !alert.acknowledged).length,
+    [alerts],
+  );
+
+  const handleLogin = ({ email, password }: LoginCredentials) => {
+    const normalizedEmail = email.trim().toLowerCase();
+    const matchingUser = authUsers.find(
+      user => user.email.toLowerCase() === normalizedEmail && user.password === password,
+    );
+
+    if (!matchingUser) {
+      setLoginError('E-mail ou senha inválidos. Verifique as credenciais e tente novamente.');
+      return;
+    }
+
+    const { password: _password, ...sessionUser } = matchingUser;
+    setCurrentUser(sessionUser);
+    setLoginError(null);
   };
 
-  const pendingAlerts = alerts.filter(a => !a.acknowledged).length;
+  const handleLogout = () => {
+    setCurrentUser(null);
+    setActiveView('dashboard');
+    setIsCollapsed(false);
+  };
 
   const handleAcknowledgeAlert = (alertId: string) => {
-    setAlerts(prev => prev.map(alert => 
-      alert.id === alertId 
-        ? { 
-            ...alert, 
-            acknowledged: true, 
-            acknowledgedBy: currentUser.name,
-            acknowledgedAt: new Date().toISOString()
-          }
-        : alert
-    ));
+    setAlerts(prev =>
+      prev.map(alert =>
+        alert.id === alertId
+          ? {
+              ...alert,
+              acknowledged: true,
+              acknowledgedBy: currentUser?.name ?? 'Usuário',
+              acknowledgedAt: new Date().toISOString(),
+            }
+          : alert,
+      ),
+    );
   };
 
   const renderView = () => {
+    if (!currentUser) {
+      return null;
+    }
+
     switch (activeView) {
       case 'dashboard':
         return <DashboardView devices={mockDevices} alerts={alerts} vehicles={mockVehicles} />;
       case 'map':
-        return <FleetMapView 
-          devices={mockDevices} 
-          drivers={mockDrivers} 
-          vehicles={mockVehicles}
-          onNavigateToAdmin={() => setActiveView('admin')}
-        />;
+        return (
+          <FleetMapView
+            devices={mockDevices}
+            drivers={mockDrivers}
+            vehicles={mockVehicles}
+            onNavigateToAdmin={() => {
+              if (viewPermissions[currentUser.role].includes('admin')) {
+                setActiveView('admin');
+              }
+            }}
+          />
+        );
       case 'vehicles':
         return <VehiclesList devices={mockDevices} vehicles={mockVehicles} drivers={mockDrivers} />;
       case 'drivers':
@@ -78,29 +132,51 @@ function App() {
       case 'trips':
         return <TripsView trips={mockTrips} drivers={mockDrivers} vehicles={mockVehicles} />;
       case 'admin':
-        return <AdminView />;
+        if (currentUser.role === 'child_user') {
+          return (
+            <div className="bg-white border border-red-200 text-red-700 rounded-xl p-6">
+              <h2 className="text-lg font-semibold mb-2">Acesso restrito</h2>
+              <p className="text-sm">
+                Apenas o admin geral e usuários mestres podem acessar a área administrativa completa.
+              </p>
+            </div>
+          );
+        }
+
+        return (
+          <AdminView
+            currentUser={currentUser}
+            users={authUsers}
+            onUsersChange={setAuthUsers}
+          />
+        );
       case 'settings':
         return <SettingsView />;
       default:
-        return <DashboardView devices={mockDevices} alerts={alerts} />;
+        return <DashboardView devices={mockDevices} alerts={alerts} vehicles={mockVehicles} />;
     }
   };
 
+  if (!currentUser) {
+    return <LoginView onLogin={handleLogin} error={loginError} users={authUsers} />;
+  }
+
+  const allowedViews = viewPermissions[currentUser.role];
+
   return (
     <div className="flex flex-col lg:flex-row min-h-screen bg-gray-50">
-      <Sidebar 
+      <Sidebar
         activeView={activeView}
         onViewChange={setActiveView}
         isCollapsed={isCollapsed}
         onToggleCollapse={() => setIsCollapsed(!isCollapsed)}
+        allowedViews={allowedViews}
       />
-      
+
       <div className="flex-1 flex flex-col min-w-0">
-        <Header user={currentUser} alertCount={pendingAlerts} />
-        
-        <main className="flex-1 p-3 sm:p-6 overflow-auto">
-          {renderView()}
-        </main>
+        <Header user={currentUser} alertCount={pendingAlerts} onLogout={handleLogout} />
+
+        <main className="flex-1 p-3 sm:p-6 overflow-auto">{renderView()}</main>
       </div>
     </div>
   );
