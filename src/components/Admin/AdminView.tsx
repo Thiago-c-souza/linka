@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
-import { 
-  Building, 
-  Truck, 
-  Smartphone, 
-  Users, 
-  Shield, 
+import {
+  Building,
+  Truck,
+  Smartphone,
+  Users,
+  Shield,
   BarChart3,
-  Settings as SettingsIcon
+  Settings as SettingsIcon,
+  UserPlus
 } from 'lucide-react';
 import { ClientsManagement } from './ClientsManagement';
 import { VehiclesManagement } from './VehiclesManagement';
@@ -16,12 +17,23 @@ import { RolesManagement } from './RolesManagement';
 import { AdminReports } from './AdminReports';
 import { EquipmentRegistration } from '../Equipment/EquipmentRegistration';
 import { AdminSettings } from './AdminSettings';
+import { UserHierarchyManager } from './UserHierarchyManager';
+import { AuthUser, SessionUser } from '../../types/auth';
+import { FleetStore } from '../../hooks/useFleetStore';
 
-export const AdminView: React.FC = () => {
+interface AdminViewProps {
+  currentUser: SessionUser;
+  users: AuthUser[];
+  onUsersChange: (users: AuthUser[]) => void;
+  fleet: FleetStore;
+}
+
+export const AdminView: React.FC<AdminViewProps> = ({ currentUser, users, onUsersChange, fleet }) => {
   const [activeTab, setActiveTab] = useState('clients');
 
   const tabs = [
     { id: 'clients', label: 'Clientes', icon: Building },
+    { id: 'userHierarchy', label: 'Usuários & Hierarquia', icon: UserPlus },
     { id: 'equipment', label: 'Equipamentos', icon: Smartphone },
     { id: 'vehicles', label: 'Veículos', icon: Truck },
     { id: 'devices', label: 'Dispositivos', icon: Smartphone },
@@ -35,10 +47,27 @@ export const AdminView: React.FC = () => {
     switch (activeTab) {
       case 'clients':
         return <ClientsManagement />;
+      case 'userHierarchy':
+        return (
+          <UserHierarchyManager
+            currentUser={currentUser}
+            users={users}
+            onUsersChange={onUsersChange}
+          />
+        );
       case 'equipment':
         return <EquipmentRegistration />;
       case 'vehicles':
-        return <VehiclesManagement />;
+        return (
+          <VehiclesManagement
+            vehicles={fleet.vehicles}
+            devices={fleet.devices}
+            drivers={fleet.drivers}
+            onCreateVehicle={fleet.createVehicle}
+            onDeleteVehicle={fleet.deleteVehicle}
+            traccarConfig={fleet.traccarConfig}
+          />
+        );
       case 'devices':
         return <DevicesManagement />;
       case 'drivers':
@@ -48,7 +77,18 @@ export const AdminView: React.FC = () => {
       case 'reports':
         return <AdminReports />;
       case 'settings':
-        return <AdminSettings />;
+        return (
+          <AdminSettings
+            mapConfig={fleet.mapConfig}
+            onSaveMapKey={fleet.saveMapApiKey}
+            onClearMapKey={fleet.clearMapApiKey}
+            onUpdateMapSettings={fleet.updateMapSettings}
+            onSetMapProvider={fleet.setMapProvider}
+            traccarConfig={fleet.traccarConfig}
+            onUpdateTraccarConfig={fleet.updateTraccarConfig}
+            onTestTraccarConnection={fleet.testTraccarConnection}
+          />
+        );
       default:
         return <ClientsManagement />;
     }

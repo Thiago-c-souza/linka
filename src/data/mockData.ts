@@ -164,6 +164,7 @@ export const mockVehicles: Vehicle[] = [
   {
     id: 'v_001',
     tenantId: 't_001',
+    clientId: 'client_001',
     plate: 'ABC1234',
     model: 'Scania R450',
     year: 2022,
@@ -175,11 +176,14 @@ export const mockVehicles: Vehicle[] = [
     odometer: 45872,
     nextMaintenance: 50000,
     vehicleType: 'truck',
+    color: 'Branco',
+    chassisNumber: '9BSC4X2008R123456',
     photo: 'https://images.pexels.com/photos/1118448/pexels-photo-1118448.jpeg?auto=compress&cs=tinysrgb&w=400'
   },
   {
     id: 'v_002',
     tenantId: 't_001',
+    clientId: 'client_001',
     plate: 'DEF5678',
     model: 'Volvo FH540',
     year: 2023,
@@ -191,11 +195,14 @@ export const mockVehicles: Vehicle[] = [
     odometer: 32145,
     nextMaintenance: 35000,
     vehicleType: 'truck',
+    color: 'Azul',
+    chassisNumber: '9BVF4X2009R654321',
     photo: 'https://images.pexels.com/photos/1118448/pexels-photo-1118448.jpeg?auto=compress&cs=tinysrgb&w=400'
   },
   {
     id: 'v_003',
     tenantId: 't_001',
+    clientId: 'client_002',
     plate: 'GHI9012',
     model: 'Mercedes Actros',
     year: 2021,
@@ -206,7 +213,9 @@ export const mockVehicles: Vehicle[] = [
     status: 'maintenance',
     odometer: 28934,
     nextMaintenance: 30000,
-    vehicleType: 'truck'
+    vehicleType: 'truck',
+    color: 'Vermelho',
+    chassisNumber: '9BME4X2007R789012'
   }
 ];
 

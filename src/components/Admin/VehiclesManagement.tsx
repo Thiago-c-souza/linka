@@ -1,640 +1,598 @@
-import React, { useState } from 'react';
-import { Plus, Search, Edit, Trash2, Eye, Truck, Link, Unlink, Wrench, X, Save, Upload, Image as ImageIcon } from 'lucide-react';
-import { AdminVehicle, Client, AdminDevice } from '../../types/admin';
-import { mockAdminVehicles, mockClients, mockAdminDevices } from '../../data/adminMockData';
-import { handleImageUpload, validateImageUrl } from '../../utils/vehicleIcons';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Plus, Search, Truck, Cpu, AlertCircle, CheckCircle2, Loader2, Trash2 } from 'lucide-react';
+import { Device, Driver, Vehicle } from '../../types';
+import { CreateVehicleInput, CreateVehicleResult } from '../../hooks/useFleetStore';
+import { TraccarConfig } from '../../services/traccarService';
 
-export const VehiclesManagement: React.FC = () => {
-  const [vehicles, setVehicles] = useState<AdminVehicle[]>(mockAdminVehicles);
+interface VehiclesManagementProps {
+  vehicles: Vehicle[];
+  devices: Device[];
+  drivers: Driver[];
+  onCreateVehicle: (input: CreateVehicleInput) => Promise<CreateVehicleResult>;
+  onDeleteVehicle: (vehicleId: string) => void;
+  traccarConfig: TraccarConfig;
+}
+
+interface VehicleFormState {
+  plate: string;
+  brand: string;
+  model: string;
+  year: number;
+  fuelType: Vehicle['fuelType'];
+  vehicleType?: Vehicle['vehicleType'];
+  driverId?: string;
+  registerDevice: boolean;
+  imei: string;
+  deviceModel: string;
+  protocol: string;
+  iccid: string;
+  pushToTraccar: boolean;
+  traccarVehicleName: string;
+  traccarDeviceName: string;
+}
+
+const initialFormState: VehicleFormState = {
+  plate: '',
+  brand: '',
+  model: '',
+  year: new Date().getFullYear(),
+  fuelType: 'diesel',
+  vehicleType: 'truck',
+  driverId: undefined,
+  registerDevice: true,
+  imei: '',
+  deviceModel: '',
+  protocol: 'GT06',
+  iccid: '',
+  pushToTraccar: false,
+  traccarVehicleName: '',
+  traccarDeviceName: '',
+};
+
+const statusBadge: Record<string, string> = {
+  active: 'bg-green-100 text-green-800',
+  maintenance: 'bg-yellow-100 text-yellow-800',
+  inactive: 'bg-gray-100 text-gray-700',
+};
+
+const fuelLabels: Record<Vehicle['fuelType'], string> = {
+  diesel: 'Diesel',
+  gasoline: 'Gasolina',
+  electric: 'Elétrico',
+  hybrid: 'Híbrido',
+};
+
+const vehicleTypeLabels: Record<NonNullable<Vehicle['vehicleType']>, string> = {
+  car: 'Carro',
+  truck: 'Caminhão',
+  motorcycle: 'Moto',
+  machine: 'Máquina',
+};
+
+export const VehiclesManagement: React.FC<VehiclesManagementProps> = ({
+  vehicles,
+  devices,
+  drivers,
+  onCreateVehicle,
+  onDeleteVehicle,
+  traccarConfig,
+}) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
-  const [filterClient, setFilterClient] = useState<string>('all');
-  const [showEditModal, setShowEditModal] = useState(false);
-  const [editingVehicle, setEditingVehicle] = useState<AdminVehicle | null>(null);
-  const [formData, setFormData] = useState<Partial<AdminVehicle>>({});
-  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
-  const [photoError, setPhotoError] = useState<string>('');
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [formState, setFormState] = useState<VehicleFormState>(initialFormState);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
-  const getClientName = (clientId: string) => {
-    return mockClients.find(c => c.id === clientId)?.name || 'N/A';
-  };
-
-  const getDeviceInfo = (deviceId?: string) => {
-    return deviceId ? mockAdminDevices.find(d => d.id === deviceId) : undefined;
-  };
-
-  const filteredVehicles = vehicles.filter(vehicle => {
-    const clientName = getClientName(vehicle.clientId);
-    
-    const matchesSearch = !searchTerm || 
-      vehicle.plate.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      vehicle.model.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      vehicle.brand.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      clientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      vehicle.chassisNumber.toLowerCase().includes(searchTerm.toLowerCase());
-    
-    const matchesStatus = filterStatus === 'all' || vehicle.status === filterStatus;
-    const matchesClient = filterClient === 'all' || vehicle.clientId === filterClient;
-    
-    return matchesSearch && matchesStatus && matchesClient;
-  });
-
-  const getStatusBadge = (status: string) => {
-    const badges = {
-      active: 'bg-green-100 text-green-800',
-      inactive: 'bg-gray-100 text-gray-800',
-      maintenance: 'bg-yellow-100 text-yellow-800'
-    };
-    return badges[status as keyof typeof badges] || badges.inactive;
-  };
-
-  const getVehicleTypeLabel = (type: string) => {
-    const labels = {
-      car: 'Carro',
-      truck: 'Caminhão',
-      motorcycle: 'Moto',
-      machine: 'Máquina'
-    };
-    return labels[type as keyof typeof labels] || type;
-  };
-
-  const handleEdit = (vehicle: AdminVehicle) => {
-    setEditingVehicle(vehicle);
-    setFormData(vehicle);
-    setShowEditModal(true);
-  };
-
-  const handleDelete = (vehicleId: string) => {
-    if (confirm('Tem certeza que deseja excluir este veículo?')) {
-      setVehicles(prev => prev.filter(v => v.id !== vehicleId));
+  useEffect(() => {
+    if (!traccarConfig.baseUrl && formState.pushToTraccar) {
+      setFormState(prev => ({ ...prev, pushToTraccar: false }));
     }
+  }, [traccarConfig.baseUrl]);
+
+  const filteredVehicles = useMemo(() => {
+    return vehicles.filter(vehicle => {
+      const device = vehicle.deviceId ? devices.find(d => d.id === vehicle.deviceId) : undefined;
+      const driver = vehicle.driverId ? drivers.find(d => d.id === vehicle.driverId) : undefined;
+
+      const matchesSearch = !searchTerm
+        || vehicle.plate.toLowerCase().includes(searchTerm.toLowerCase())
+        || vehicle.model.toLowerCase().includes(searchTerm.toLowerCase())
+        || vehicle.brand.toLowerCase().includes(searchTerm.toLowerCase())
+        || driver?.name?.toLowerCase().includes(searchTerm.toLowerCase());
+
+      const matchesStatus = filterStatus === 'all' || vehicle.status === filterStatus;
+
+      return matchesSearch && matchesStatus;
+    });
+  }, [vehicles, devices, drivers, filterStatus, searchTerm]);
+
+  const totalVehicles = vehicles.length;
+  const vehiclesWithDevice = vehicles.filter(vehicle => Boolean(vehicle.deviceId)).length;
+  const maintenanceVehicles = vehicles.filter(vehicle => vehicle.status === 'maintenance').length;
+  const withoutDevice = totalVehicles - vehiclesWithDevice;
+
+  const handleOpenModal = () => {
+    setFormState(initialFormState);
+    setFeedback(null);
+    setShowCreateModal(true);
   };
 
-  const handleLinkDevice = (vehicleId: string) => {
-    // Open device linking modal
-    console.log('Link device to vehicle:', vehicleId);
+  const handleFormChange = <K extends keyof VehicleFormState>(field: K, value: VehicleFormState[K]) => {
+    setFormState(prev => ({ ...prev, [field]: value }));
   };
 
-  const handleUnlinkDevice = (vehicleId: string) => {
-    if (confirm('Tem certeza que deseja desvincular o dispositivo?')) {
-      setVehicles(prev => prev.map(v => 
-        v.id === vehicleId ? { ...v, deviceId: undefined } : v
-      ));
-    }
-  };
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
 
-  const handleSaveEdit = () => {
-    if (editingVehicle && formData) {
-      setVehicles(prev => prev.map(v => 
-        v.id === editingVehicle.id ? { ...v, ...formData } as AdminVehicle : v
-      ));
-      setShowEditModal(false);
-      setEditingVehicle(null);
-      setFormData({});
-    }
-    if (!editingVehicle && formData) {
-      // Creating new vehicle
-      const newVehicle: AdminVehicle = {
-        id: `av_${Date.now()}`,
-        clientId: formData.clientId || '',
-        plate: formData.plate || '',
-        model: formData.model || '',
-        brand: formData.brand || '',
-        year: formData.year || new Date().getFullYear(),
-        color: formData.color || '',
-        chassisNumber: formData.chassisNumber || '',
-        vehicleType: formData.vehicleType || 'car',
-        initialOdometer: formData.initialOdometer || 0,
-        currentOdometer: formData.currentOdometer || formData.initialOdometer || 0,
-        deviceId: formData.deviceId,
-        status: formData.status || 'active',
-        createdAt: new Date().toISOString()
-      };
-      
-      setVehicles(prev => [...prev, newVehicle]);
-      setShowEditModal(false);
-      setEditingVehicle(null);
-      setFormData({});
-    }
-  };
-
-  const handleCloseModal = () => {
-    setShowEditModal(false);
-    setEditingVehicle(null);
-    setFormData({});
-  };
-
-  const handleInputChange = (field: string, value: any) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
-  };
-
-  const handlePhotoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    setIsUploadingPhoto(true);
-    setPhotoError('');
-
-    try {
-      const photoData = await handleImageUpload(file);
-      handleInputChange('photo', photoData);
-    } catch (error) {
-      setPhotoError(error instanceof Error ? error.message : 'Erro ao fazer upload da imagem');
-    } finally {
-      setIsUploadingPhoto(false);
-    }
-  };
-
-  const handlePhotoUrlChange = async (url: string) => {
-    if (!url.trim()) {
-      handleInputChange('photo', '');
-      setPhotoError('');
+    if (!formState.plate.trim()) {
+      setFeedback({ type: 'error', message: 'Informe a placa do veículo.' });
       return;
     }
 
-    setPhotoError('');
-    const isValid = await validateImageUrl(url);
-    if (isValid) {
-      handleInputChange('photo', url);
-    } else {
-      setPhotoError('URL da imagem inválida ou inacessível');
+    const normalizedPlate = formState.plate.trim().toUpperCase();
+    if (vehicles.some(vehicle => vehicle.plate === normalizedPlate)) {
+      setFeedback({ type: 'error', message: 'Já existe um veículo cadastrado com esta placa.' });
+      return;
+    }
+
+    if (!formState.model.trim()) {
+      setFeedback({ type: 'error', message: 'Informe o modelo do veículo.' });
+      return;
+    }
+
+    if (formState.registerDevice && !formState.imei.trim()) {
+      setFeedback({ type: 'error', message: 'Informe o IMEI do dispositivo a ser cadastrado.' });
+      return;
+    }
+
+    if (formState.registerDevice) {
+      const sanitizedImei = formState.imei.replace(/\D/g, '');
+      if (devices.some(device => device.imei.replace(/\D/g, '') === sanitizedImei)) {
+        setFeedback({ type: 'error', message: 'Já existe um dispositivo cadastrado com este IMEI.' });
+        return;
+      }
+    }
+
+    setIsSubmitting(true);
+    setFeedback(null);
+
+    try {
+      const sanitizedImei = formState.registerDevice ? formState.imei.replace(/\D/g, '') : undefined;
+
+      const payload: CreateVehicleInput = {
+        plate: formState.plate,
+        brand: formState.brand,
+        model: formState.model,
+        year: Number(formState.year) || new Date().getFullYear(),
+        fuelType: formState.fuelType,
+        vehicleType: formState.vehicleType,
+        driverId: formState.driverId,
+        status: 'active',
+        device: formState.registerDevice
+          ? {
+              imei: sanitizedImei || '',
+              model: formState.deviceModel || 'Dispositivo de rastreamento',
+              protocol: formState.protocol,
+              iccid: formState.iccid,
+            }
+          : null,
+        pushToTraccar: formState.pushToTraccar,
+        traccarDeviceName: formState.traccarDeviceName || undefined,
+        traccarVehicleName: formState.traccarVehicleName || undefined,
+      };
+
+      const result = await onCreateVehicle(payload);
+
+      let message = 'Veículo cadastrado com sucesso na plataforma.';
+      if (result.traccar) {
+        message += ` Integração Traccar: ${result.traccar.message}`;
+      }
+
+      setFeedback({ type: 'success', message });
+      setFormState(initialFormState);
+    } catch (error) {
+      setFeedback({
+        type: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Não foi possível cadastrar o veículo. Tente novamente.',
+      });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  const removePhoto = () => {
-    handleInputChange('photo', '');
-    setPhotoError('');
+  const handleDelete = (vehicleId: string) => {
+    if (window.confirm('Deseja realmente remover este veículo?')) {
+      onDeleteVehicle(vehicleId);
+    }
   };
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Gestão de Veículos</h2>
-          <p className="text-gray-600">Cadastro e gerenciamento da frota de clientes</p>
+          <p className="text-gray-600">Cadastre novos veículos, associe dispositivos e sincronize com o Traccar.</p>
         </div>
-        <button 
-          onClick={() => {
-            setEditingVehicle(null);
-            setFormData({});
-            setShowEditModal(true);
-          }}
-          className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+        <button
+          onClick={handleOpenModal}
+          className="inline-flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
         >
-          <Plus size={20} />
-          Adicionar Veículo
+          <Plus size={18} />
+          Novo veículo
         </button>
       </div>
 
-      {/* Filters */}
-      <div className="bg-white rounded-xl border border-gray-200 p-6">
-        <div className="flex flex-col lg:flex-row gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="bg-white border border-gray-200 rounded-xl p-4">
+          <p className="text-xs text-gray-500">Veículos cadastrados</p>
+          <p className="text-2xl font-semibold text-gray-900">{totalVehicles}</p>
+        </div>
+        <div className="bg-white border border-gray-200 rounded-xl p-4">
+          <p className="text-xs text-gray-500">Com dispositivo</p>
+          <p className="text-2xl font-semibold text-blue-600">{vehiclesWithDevice}</p>
+        </div>
+        <div className="bg-white border border-gray-200 rounded-xl p-4">
+          <p className="text-xs text-gray-500">Sem dispositivo</p>
+          <p className="text-2xl font-semibold text-yellow-600">{withoutDevice}</p>
+        </div>
+        <div className="bg-white border border-gray-200 rounded-xl p-4">
+          <p className="text-xs text-gray-500">Em manutenção</p>
+          <p className="text-2xl font-semibold text-amber-600">{maintenanceVehicles}</p>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
+        <div className="flex flex-col sm:flex-row gap-4">
           <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={20} />
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
             <input
               type="text"
-              placeholder="Buscar por placa, modelo, marca, cliente ou chassi..."
+              placeholder="Buscar por placa, modelo ou motorista"
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent w-full"
+              onChange={(event) => setSearchTerm(event.target.value)}
+              className="pl-9 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent w-full text-sm"
             />
           </div>
           <select
-            value={filterClient}
-            onChange={(e) => setFilterClient(e.target.value)}
-            className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          >
-            <option value="all">Todos os Clientes</option>
-            {mockClients.map(client => (
-              <option key={client.id} value={client.id}>{client.name}</option>
-            ))}
-          </select>
-          <select
             value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value)}
-            className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            onChange={(event) => setFilterStatus(event.target.value)}
+            className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
           >
-            <option value="all">Todos os Status</option>
+            <option value="all">Todos os status</option>
             <option value="active">Ativo</option>
-            <option value="inactive">Inativo</option>
             <option value="maintenance">Manutenção</option>
+            <option value="inactive">Inativo</option>
           </select>
         </div>
       </div>
 
-      {/* Vehicles Table */}
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                <th className="text-left p-4 font-semibold text-gray-900">Veículo</th>
-                <th className="text-left p-4 font-semibold text-gray-900">Cliente</th>
-                <th className="text-left p-4 font-semibold text-gray-900">Tipo</th>
-                <th className="text-left p-4 font-semibold text-gray-900">Odômetro</th>
-                <th className="text-left p-4 font-semibold text-gray-900">Dispositivo</th>
-                <th className="text-left p-4 font-semibold text-gray-900">Status</th>
-                <th className="text-left p-4 font-semibold text-gray-900">Ações</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {filteredVehicles.map((vehicle) => {
-                const device = getDeviceInfo(vehicle.deviceId);
-                
-                return (
-                  <tr key={vehicle.id} className="hover:bg-gray-50 transition-colors">
-                    <td className="p-4">
-                      <div className="flex items-center gap-3">
-                        <div className="p-2 bg-blue-100 rounded-lg">
-                          <Truck className="text-blue-600" size={20} />
-                        </div>
-                        <div>
-                          <div className="font-semibold text-gray-900">{vehicle.plate}</div>
-                          <div className="text-sm text-gray-600">
-                            {vehicle.brand} {vehicle.model} ({vehicle.year})
-                          </div>
-                          <div className="text-xs text-gray-500">
-                            Chassi: {vehicle.chassisNumber}
-                          </div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="p-4">
-                      <div className="text-sm font-medium text-gray-900">
-                        {getClientName(vehicle.clientId)}
-                      </div>
-                    </td>
-                    <td className="p-4">
-                      <div className="text-sm text-gray-900">
-                        {getVehicleTypeLabel(vehicle.vehicleType)}
-                      </div>
-                      <div className="text-xs text-gray-600">
-                        Cor: {vehicle.color}
-                      </div>
-                    </td>
-                    <td className="p-4">
-                      <div className="text-sm">
-                        <div className="font-medium text-gray-900">
-                          {vehicle.currentOdometer.toLocaleString()} km
-                        </div>
-                        <div className="text-xs text-gray-600">
-                          Inicial: {vehicle.initialOdometer.toLocaleString()} km
-                        </div>
-                      </div>
-                    </td>
-                    <td className="p-4">
-                      {device ? (
-                        <div className="text-sm">
-                          <div className="font-medium text-gray-900">{device.model}</div>
-                          <div className="text-xs text-gray-600">IMEI: {device.imei}</div>
-                          <div className={`text-xs font-medium ${
-                            device.activationStatus === 'active' ? 'text-green-600' : 'text-red-600'
-                          }`}>
-                            {device.activationStatus}
-                          </div>
-                        </div>
-                      ) : (
-                        <span className="text-sm text-gray-500">Não vinculado</span>
-                      )}
-                    </td>
-                    <td className="p-4">
-                      <span className={`px-2 py-1 text-xs font-medium rounded-full ${getStatusBadge(vehicle.status)}`}>
-                        {vehicle.status === 'active' ? 'Ativo' : 
-                         vehicle.status === 'maintenance' ? 'Manutenção' : 'Inativo'}
-                      </span>
-                    </td>
-                    <td className="p-4">
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => handleEdit(vehicle)}
-                          className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                          title="Editar"
-                        >
-                          <Edit size={16} />
-                        </button>
-                        <button
-                          onClick={() => {/* View details */}}
-                          className="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
-                          title="Visualizar"
-                        >
-                          <Eye size={16} />
-                        </button>
-                        {vehicle.deviceId ? (
-                          <button
-                            onClick={() => handleUnlinkDevice(vehicle.id)}
-                            className="p-2 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg transition-colors"
-                            title="Desvincular Dispositivo"
-                          >
-                            <Unlink size={16} />
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => handleLinkDevice(vehicle.id)}
-                            className="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
-                            title="Vincular Dispositivo"
-                          >
-                            <Link size={16} />
-                          </button>
-                        )}
-                        <button
-                          onClick={() => handleDelete(vehicle.id)}
-                          className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                          title="Excluir"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+        {filteredVehicles.map(vehicle => {
+          const device = vehicle.deviceId ? devices.find(d => d.id === vehicle.deviceId) : undefined;
+          const driver = vehicle.driverId ? drivers.find(d => d.id === vehicle.driverId) : undefined;
+
+          return (
+            <div key={vehicle.id} className="bg-white border border-gray-200 rounded-xl p-4 sm:p-6 space-y-4">
+              <div className="flex items-start justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">{vehicle.plate}</p>
+                  <p className="text-xs text-gray-500">
+                    {vehicle.brand} {vehicle.model} · {vehicle.year}
+                  </p>
+                </div>
+                <span className={`px-2 py-1 text-xs font-medium rounded-full ${statusBadge[vehicle.status] ?? 'bg-gray-100 text-gray-700'}`}>
+                  {vehicle.status === 'maintenance' ? 'Manutenção' : vehicle.status === 'inactive' ? 'Inativo' : 'Ativo'}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 text-xs text-gray-600">
+                <div>
+                  <span className="font-medium text-gray-500 block">Tipo</span>
+                  <span className="text-gray-800">
+                    {vehicle.vehicleType ? vehicleTypeLabels[vehicle.vehicleType] : 'Não informado'}
+                  </span>
+                </div>
+                <div>
+                  <span className="font-medium text-gray-500 block">Combustível</span>
+                  <span className="text-gray-800">{fuelLabels[vehicle.fuelType]}</span>
+                </div>
+                <div>
+                  <span className="font-medium text-gray-500 block">Odômetro</span>
+                  <span className="text-gray-800">{vehicle.odometer.toLocaleString()} km</span>
+                </div>
+                <div>
+                  <span className="font-medium text-gray-500 block">Próx. revisão</span>
+                  <span className="text-gray-800">{vehicle.nextMaintenance.toLocaleString()} km</span>
+                </div>
+              </div>
+
+              {device ? (
+                <div className="p-3 rounded-lg bg-blue-50 border border-blue-100 text-xs text-blue-800 space-y-1">
+                  <div className="flex items-center gap-2 font-medium text-blue-900">
+                    <Cpu size={14} /> Dispositivo vinculado
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span>Modelo</span>
+                    <span className="font-semibold">{device.model}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span>IMEI</span>
+                    <span className="font-mono">{device.imei}</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-3 rounded-lg bg-gray-50 border border-gray-200 text-xs text-gray-600">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle size={14} />
+                    Sem dispositivo cadastrado
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between text-xs text-gray-500">
+                <span>Atualização</span>
+                <span>{device?.lastUpdate ? formatLastUpdate(device.lastUpdate) : 'Sem dados'}</span>
+              </div>
+
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  onClick={() => handleDelete(vehicle.id)}
+                  className="inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50"
+                >
+                  <Trash2 size={14} /> Remover
+                </button>
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       {filteredVehicles.length === 0 && (
-        <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
-          <Truck className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-          <h3 className="text-lg font-medium text-gray-900 mb-2">Nenhum veículo encontrado</h3>
-          <p className="text-gray-600">Tente ajustar os filtros ou adicionar novos veículos.</p>
+        <div className="bg-white border border-gray-200 rounded-xl p-6 text-center">
+          <Truck className="w-12 h-12 text-gray-400 mx-auto mb-3" />
+          <p className="font-medium text-gray-900">Nenhum veículo encontrado</p>
+          <p className="text-sm text-gray-600">Ajuste os filtros ou cadastre um novo veículo.</p>
         </div>
       )}
 
-      {/* Edit Modal */}
-      {showEditModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between p-6 border-b border-gray-200">
-              <h3 className="text-lg font-semibold text-gray-900">
-                {editingVehicle ? 'Editar Veículo' : 'Novo Veículo'}
-              </h3>
+      {showCreateModal && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-3xl w-full overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Cadastrar veículo</h3>
+                <p className="text-sm text-gray-600">Informe os dados do veículo e, opcionalmente, registre o dispositivo.</p>
+              </div>
               <button
-                onClick={handleCloseModal}
-                className="p-2 text-gray-400 hover:text-gray-600 rounded-lg transition-colors"
+                onClick={() => setShowCreateModal(false)}
+                className="text-gray-500 hover:text-gray-900"
+                aria-label="Fechar"
               >
-                <X size={20} />
+                ×
               </button>
             </div>
-            
-            <div className="p-6 space-y-6">
+
+            <form onSubmit={handleSubmit} className="px-6 py-5 space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Placa *
-                  </label>
+                  <label className="text-xs font-medium text-gray-600">Placa *</label>
                   <input
                     type="text"
-                    value={formData.plate || ''}
-                    onChange={(e) => handleInputChange('plate', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    placeholder="ABC1234"
+                    value={formState.plate}
+                    onChange={(event) => handleFormChange('plate', event.target.value.toUpperCase())}
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="ABC1D23"
                   />
                 </div>
-                
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Cliente *
-                  </label>
-                  <select
-                    value={formData.clientId || ''}
-                    onChange={(e) => handleInputChange('clientId', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  >
-                    <option value="">Selecione um cliente</option>
-                    {mockClients.map(client => (
-                      <option key={client.id} value={client.id}>{client.name}</option>
-                    ))}
-                  </select>
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Marca *
-                  </label>
+                  <label className="text-xs font-medium text-gray-600">Marca</label>
                   <input
                     type="text"
-                    value={formData.brand || ''}
-                    onChange={(e) => handleInputChange('brand', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    placeholder="Scania"
+                    value={formState.brand}
+                    onChange={(event) => handleFormChange('brand', event.target.value)}
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="Ex: Volvo"
                   />
                 </div>
-                
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Modelo *
-                  </label>
+                  <label className="text-xs font-medium text-gray-600">Modelo *</label>
                   <input
                     type="text"
-                    value={formData.model || ''}
-                    onChange={(e) => handleInputChange('model', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    placeholder="R450"
+                    value={formState.model}
+                    onChange={(event) => handleFormChange('model', event.target.value)}
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="Ex: FH540"
                   />
                 </div>
-                
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Ano *
-                  </label>
+                  <label className="text-xs font-medium text-gray-600">Ano</label>
                   <input
                     type="number"
-                    value={formData.year || ''}
-                    onChange={(e) => handleInputChange('year', parseInt(e.target.value))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    placeholder="2023"
-                    min="1990"
-                    max="2025"
+                    value={formState.year}
+                    onChange={(event) => handleFormChange('year', Number(event.target.value))}
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   />
                 </div>
-                
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Cor
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.color || ''}
-                    onChange={(e) => handleInputChange('color', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    placeholder="Branco"
-                  />
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Tipo de Veículo *
-                  </label>
+                  <label className="text-xs font-medium text-gray-600">Tipo</label>
                   <select
-                    value={formData.vehicleType || ''}
-                    onChange={(e) => handleInputChange('vehicleType', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    value={formState.vehicleType}
+                    onChange={(event) => handleFormChange('vehicleType', event.target.value as Vehicle['vehicleType'])}
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   >
-                    <option value="">Selecione o tipo</option>
-                    <option value="car">Carro</option>
                     <option value="truck">Caminhão</option>
+                    <option value="car">Carro</option>
                     <option value="motorcycle">Moto</option>
                     <option value="machine">Máquina</option>
                   </select>
                 </div>
-                
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Status
-                  </label>
+                  <label className="text-xs font-medium text-gray-600">Combustível</label>
                   <select
-                    value={formData.status || 'active'}
-                    onChange={(e) => handleInputChange('status', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    value={formState.fuelType}
+                    onChange={(event) => handleFormChange('fuelType', event.target.value as Vehicle['fuelType'])}
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   >
-                    <option value="active">Ativo</option>
-                    <option value="inactive">Inativo</option>
-                    <option value="maintenance">Manutenção</option>
+                    <option value="diesel">Diesel</option>
+                    <option value="gasoline">Gasolina</option>
+                    <option value="electric">Elétrico</option>
+                    <option value="hybrid">Híbrido</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-gray-600">Motorista responsável</label>
+                  <select
+                    value={formState.driverId ?? ''}
+                    onChange={(event) => handleFormChange('driverId', event.target.value || undefined)}
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  >
+                    <option value="">Sem vinculação</option>
+                    {drivers.map(driver => (
+                      <option key={driver.id} value={driver.id}>
+                        {driver.name}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Número do Chassi *
-                </label>
-                <input
-                  type="text"
-                  value={formData.chassisNumber || ''}
-                  onChange={(e) => handleInputChange('chassisNumber', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="9BSC4X2008R123456"
-                />
-              </div>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Odômetro Inicial (km)
-                  </label>
+
+              <div className="border border-gray-200 rounded-lg p-4 space-y-3">
+                <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
                   <input
-                    type="number"
-                    value={formData.initialOdometer || ''}
-                    onChange={(e) => handleInputChange('initialOdometer', parseInt(e.target.value))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    placeholder="0"
-                    min="0"
+                    type="checkbox"
+                    checked={formState.registerDevice}
+                    onChange={(event) => handleFormChange('registerDevice', event.target.checked)}
+                    className="rounded text-blue-600"
                   />
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Odômetro Atual (km)
-                  </label>
-                  <input
-                    type="number"
-                    value={formData.currentOdometer || ''}
-                    onChange={(e) => handleInputChange('currentOdometer', parseInt(e.target.value))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    placeholder="45872"
-                    min="0"
-                  />
-                </div>
-              </div>
-              
-              {/* Vehicle Photo Section */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Foto do Veículo
+                  Registrar dispositivo e vincular ao veículo
                 </label>
-                <p className="text-xs text-gray-500 mb-3">
-                  Esta foto será usada como ícone personalizado no mapa. Recomendado: imagem quadrada, máximo 5MB.
-                </p>
-                
-                {/* Current Photo Preview */}
-                {formData.photo && (
-                  <div className="mb-4 p-3 border border-gray-200 rounded-lg">
-                    <div className="flex items-center gap-3">
-                      <img
-                        src={formData.photo}
-                        alt="Foto do veículo"
-                        className="w-16 h-16 object-cover rounded-lg border border-gray-300"
-                        onError={() => setPhotoError('Erro ao carregar imagem')}
+
+                {formState.registerDevice && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs font-medium text-gray-600">IMEI *</label>
+                      <input
+                        type="text"
+                        value={formState.imei}
+                        onChange={(event) => handleFormChange('imei', event.target.value)}
+                        className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       />
-                      <div className="flex-1">
-                        <p className="text-sm font-medium text-gray-900">Foto atual</p>
-                        <p className="text-xs text-gray-500">Esta imagem será usada no mapa</p>
-                      </div>
-                      <button
-                        onClick={removePhoto}
-                        className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                        title="Remover foto"
-                      >
-                        <X size={16} />
-                      </button>
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-gray-600">Modelo do dispositivo</label>
+                      <input
+                        type="text"
+                        value={formState.deviceModel}
+                        onChange={(event) => handleFormChange('deviceModel', event.target.value)}
+                        className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-gray-600">Protocolo</label>
+                      <input
+                        type="text"
+                        value={formState.protocol}
+                        onChange={(event) => handleFormChange('protocol', event.target.value)}
+                        className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-gray-600">ICCID (chip)</label>
+                      <input
+                        type="text"
+                        value={formState.iccid}
+                        onChange={(event) => handleFormChange('iccid', event.target.value)}
+                        className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
                     </div>
                   </div>
                 )}
-                
-                {/* Upload Options */}
-                <div className="space-y-3">
-                  {/* File Upload */}
-                  <div>
-                    <label className="block">
+              </div>
+
+              <div className="border border-gray-200 rounded-lg p-4 space-y-3">
+                <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={formState.pushToTraccar}
+                    onChange={(event) => handleFormChange('pushToTraccar', event.target.checked)}
+                    className="rounded text-blue-600"
+                    disabled={!traccarConfig.baseUrl}
+                  />
+                  Sincronizar automaticamente com o Traccar
+                </label>
+                {!traccarConfig.baseUrl && (
+                  <p className="text-xs text-gray-500">
+                    Configure a URL do Traccar em Administração → Configurações para habilitar a sincronização automática.
+                  </p>
+                )}
+
+                {formState.pushToTraccar && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs font-medium text-gray-600">Nome do veículo no Traccar</label>
                       <input
-                        type="file"
-                        accept="image/*"
-                        onChange={handlePhotoUpload}
-                        className="hidden"
-                        disabled={isUploadingPhoto}
+                        type="text"
+                        value={formState.traccarVehicleName}
+                        onChange={(event) => handleFormChange('traccarVehicleName', event.target.value)}
+                        className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        placeholder="Ex: Frota 01 - FH540"
                       />
-                      <div className={`border-2 border-dashed border-gray-300 rounded-lg p-4 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition-colors ${
-                        isUploadingPhoto ? 'opacity-50 cursor-not-allowed' : ''
-                      }`}>
-                        <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
-                        <p className="text-sm font-medium text-gray-700">
-                          {isUploadingPhoto ? 'Fazendo upload...' : 'Clique para fazer upload'}
-                        </p>
-                        <p className="text-xs text-gray-500">PNG, JPG até 5MB</p>
-                      </div>
-                    </label>
-                  </div>
-                  
-                  {/* URL Input */}
-                  <div className="relative">
-                    <div className="flex">
-                      <span className="inline-flex items-center px-3 text-sm text-gray-500 bg-gray-50 border border-r-0 border-gray-300 rounded-l-lg">
-                        <ImageIcon size={16} />
-                      </span>
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-gray-600">Nome do dispositivo no Traccar</label>
                       <input
-                        type="url"
-                        placeholder="Ou cole a URL de uma imagem..."
-                        onChange={(e) => handlePhotoUrlChange(e.target.value)}
-                        className="flex-1 px-3 py-2 border border-gray-300 rounded-r-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        type="text"
+                        value={formState.traccarDeviceName}
+                        onChange={(event) => handleFormChange('traccarDeviceName', event.target.value)}
+                        className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        placeholder="Ex: FH540 - IMEI"
                       />
                     </div>
                   </div>
-                </div>
-                
-                {photoError && (
-                  <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded text-sm text-red-600">
-                    {photoError}
-                  </div>
                 )}
               </div>
-            </div>
-            
-            <div className="flex items-center justify-end gap-3 p-6 border-t border-gray-200">
-              <button
-                onClick={handleCloseModal}
-                className="px-4 py-2 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={handleSaveEdit}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-              >
-                <Save size={16} />
-                Salvar Alterações
-              </button>
-            </div>
+
+              {feedback && (
+                <div
+                  className={`border rounded-lg px-4 py-3 text-sm ${
+                    feedback.type === 'success'
+                      ? 'bg-green-50 border-green-200 text-green-700'
+                      : 'bg-red-50 border-red-200 text-red-600'
+                  }`}
+                >
+                  {feedback.message}
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-3 border-t border-gray-200 pt-4">
+                <button
+                  type="button"
+                  onClick={() => setShowCreateModal(false)}
+                  className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-900"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-semibold rounded-lg hover:bg-blue-700 disabled:opacity-60"
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 size={16} className="animate-spin" /> Salvando...
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 size={16} /> Salvar veículo
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

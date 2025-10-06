@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { MapPin, Circle, Square, Navigation, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
-import { Device, Vehicle } from '../../types';
+import { Device, Vehicle, MapConfiguration } from '../../types';
 import { createVehicleIcon, getVehicleTypeFromDevice, getVehiclePhotoFromDevice } from '../../utils/vehicleIcons';
 
 interface FleetMapProps {
@@ -8,26 +8,22 @@ interface FleetMapProps {
   vehicles?: Vehicle[];
   selectedDevice?: string;
   onDeviceSelect: (deviceId: string) => void;
+  mapConfig: MapConfiguration;
 }
 
-export const FleetMap: React.FC<FleetMapProps> = ({ 
-  devices, 
+export const FleetMap: React.FC<FleetMapProps> = ({
+  devices,
   vehicles = [],
-  selectedDevice, 
-  onDeviceSelect 
+  selectedDevice,
+  onDeviceSelect,
+  mapConfig
 }) => {
   const mapRef = useRef<HTMLDivElement>(null);
   const [map, setMap] = useState<google.maps.Map | null>(null);
-  const [googleMapsApiKey, setGoogleMapsApiKey] = useState<string>('');
   const markersRef = useRef<google.maps.Marker[]>([]);
+  const trafficLayerRef = useRef<google.maps.TrafficLayer | null>(null);
 
-  // Load API key from localStorage
-  useEffect(() => {
-    const savedApiKey = localStorage.getItem('googleMapsApiKey');
-    if (savedApiKey) {
-      setGoogleMapsApiKey(savedApiKey);
-    }
-  }, []);
+  const googleMapsApiKey = mapConfig.provider === 'google' ? mapConfig.apiKey : undefined;
 
   // Initialize Google Maps
   const initializeMap = async () => {
@@ -45,7 +41,12 @@ export const FleetMap: React.FC<FleetMapProps> = ({
           const mapInstance = new google.maps.Map(mapRef.current, {
             center: { lat: -16.6799, lng: -49.255 },
             zoom: 12,
-            mapTypeId: google.maps.MapTypeId.ROADMAP,
+            mapTypeId:
+              mapConfig.settings.enableSatellite
+                ? google.maps.MapTypeId.SATELLITE
+                : mapConfig.settings.enableTerrain
+                  ? google.maps.MapTypeId.TERRAIN
+                  : google.maps.MapTypeId.ROADMAP,
             styles: [
               {
                 featureType: 'poi',
@@ -60,6 +61,11 @@ export const FleetMap: React.FC<FleetMapProps> = ({
           });
 
           setMap(mapInstance);
+
+          if (mapConfig.settings.enableTraffic) {
+            trafficLayerRef.current = new google.maps.TrafficLayer();
+            trafficLayerRef.current.setMap(mapInstance);
+          }
         }
       };
 
@@ -75,13 +81,23 @@ export const FleetMap: React.FC<FleetMapProps> = ({
         const mapInstance = new google.maps.Map(mapRef.current, {
           center: { lat: -16.6799, lng: -49.255 },
           zoom: 12,
-          mapTypeId: google.maps.MapTypeId.ROADMAP,
+          mapTypeId:
+            mapConfig.settings.enableSatellite
+              ? google.maps.MapTypeId.SATELLITE
+              : mapConfig.settings.enableTerrain
+                ? google.maps.MapTypeId.TERRAIN
+                : google.maps.MapTypeId.ROADMAP,
           mapTypeControl: false,
           streetViewControl: false,
           fullscreenControl: false,
           zoomControl: false
         });
         setMap(mapInstance);
+
+        if (mapConfig.settings.enableTraffic) {
+          trafficLayerRef.current = new google.maps.TrafficLayer();
+          trafficLayerRef.current.setMap(mapInstance);
+        }
       }
     } catch (err) {
       console.error('Error initializing map:', err);
@@ -204,7 +220,31 @@ export const FleetMap: React.FC<FleetMapProps> = ({
     if (googleMapsApiKey) {
       initializeMap();
     }
-  }, [googleMapsApiKey]);
+  }, [googleMapsApiKey, mapConfig.settings.enableSatellite, mapConfig.settings.enableTerrain]);
+
+  useEffect(() => {
+    if (!map) {
+      return;
+    }
+
+    const desiredMapType = mapConfig.settings.enableSatellite
+      ? google.maps.MapTypeId.SATELLITE
+      : mapConfig.settings.enableTerrain
+        ? google.maps.MapTypeId.TERRAIN
+        : google.maps.MapTypeId.ROADMAP;
+
+    map.setMapTypeId(desiredMapType);
+
+    if (mapConfig.settings.enableTraffic) {
+      if (!trafficLayerRef.current) {
+        trafficLayerRef.current = new google.maps.TrafficLayer();
+      }
+      trafficLayerRef.current.setMap(map);
+    } else if (trafficLayerRef.current) {
+      trafficLayerRef.current.setMap(null);
+      trafficLayerRef.current = null;
+    }
+  }, [map, mapConfig.settings.enableTraffic, mapConfig.settings.enableSatellite, mapConfig.settings.enableTerrain]);
 
   // Update markers when devices or selection changes
   useEffect(() => {
@@ -309,7 +349,9 @@ export const FleetMap: React.FC<FleetMapProps> = ({
           <div className="text-center">
             <MapPin className="w-12 h-12 sm:w-16 sm:h-16 text-gray-400 mx-auto mb-2 sm:mb-4" />
             <p className="text-sm sm:text-base text-gray-500 font-medium">Mapa Interativo</p>
-            <p className="text-xs sm:text-sm text-gray-400">Configure a API do Google Maps em Administração → Configurações</p>
+            <p className="text-xs sm:text-sm text-gray-400">
+              Configure a API do Google Maps em Administração → Configurações para habilitar a visualização completa.
+            </p>
           </div>
         </div>
         
