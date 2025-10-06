@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Save,
   Key,
@@ -13,7 +13,12 @@ import {
 } from 'lucide-react';
 import { Loader } from '@googlemaps/js-api-loader';
 import { MapConfiguration } from '../../types';
-import { TraccarConfig, TraccarRegistrationResult } from '../../services/traccarService';
+import {
+  normalizeBaseUrls,
+  TraccarConfig,
+  TraccarRegistrationResult,
+  TraccarStreamHandlers,
+} from '../../services/traccarService';
 
 interface AdminSettingsProps {
   mapConfig: MapConfiguration;
@@ -24,6 +29,7 @@ interface AdminSettingsProps {
   traccarConfig: TraccarConfig;
   onUpdateTraccarConfig: (config: Partial<TraccarConfig>) => void;
   onTestTraccarConnection: () => Promise<TraccarRegistrationResult>;
+  onOpenTraccarStream?: (handlers?: TraccarStreamHandlers) => WebSocket | null;
 }
 
 export const AdminSettings: React.FC<AdminSettingsProps> = ({
@@ -35,6 +41,7 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
   traccarConfig,
   onUpdateTraccarConfig,
   onTestTraccarConnection,
+  onOpenTraccarStream,
 }) => {
   const [activeTab, setActiveTab] = useState<'maps' | 'system' | 'notifications' | 'integrations'>('maps');
   const [tempApiKey, setTempApiKey] = useState(mapConfig.apiKey ?? '');
@@ -42,6 +49,21 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
   const [apiTestResult, setApiTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isTestingTraccar, setIsTestingTraccar] = useState(false);
   const [traccarResult, setTraccarResult] = useState<TraccarRegistrationResult | null>(null);
+  const [wsTestStatus, setWsTestStatus] = useState<'idle' | 'connecting' | 'success' | 'error'>('idle');
+  const [wsTestMessage, setWsTestMessage] = useState<string | null>(null);
+  const wsTestRef = useRef<WebSocket | null>(null);
+
+  const normalizedTraccarUrls = useMemo(
+    () => normalizeBaseUrls(traccarConfig.baseUrl),
+    [traccarConfig.baseUrl],
+  );
+
+  useEffect(() => {
+    return () => {
+      wsTestRef.current?.close();
+      wsTestRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     setTempApiKey(mapConfig.apiKey ?? '');
@@ -110,6 +132,78 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
     const result = await onTestTraccarConnection();
     setTraccarResult(result);
     setIsTestingTraccar(false);
+  };
+
+  const handleRealtimeTest = () => {
+    if (!traccarConfig.baseUrl) {
+      setWsTestStatus('error');
+      setWsTestMessage('Informe a URL do servidor Traccar antes de testar o streaming.');
+      return;
+    }
+
+    if (!onOpenTraccarStream) {
+      setWsTestStatus('error');
+      setWsTestMessage('Teste de streaming indisponível neste ambiente.');
+      return;
+    }
+
+    wsTestRef.current?.close();
+    wsTestRef.current = null;
+
+    setWsTestStatus('connecting');
+    setWsTestMessage('Abrindo conexão em tempo real com o Traccar...');
+
+    const socket = onOpenTraccarStream({
+      queryParams: { limit: 1 },
+      onOpen: () => {
+        setWsTestStatus('success');
+        setWsTestMessage('Conexão em tempo real estabelecida com sucesso.');
+        if (wsTestRef.current) {
+          wsTestRef.current.close();
+          wsTestRef.current = null;
+        }
+      },
+      onMessage: event => {
+        if (typeof event.data !== 'string') {
+          return;
+        }
+
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload && typeof payload.type === 'string') {
+            setWsTestMessage(`Evento recebido: ${payload.type}`);
+          }
+        } catch (error) {
+          console.warn('Não foi possível interpretar o evento do Traccar.', error);
+        }
+      },
+      onError: () => {
+        setWsTestStatus('error');
+        setWsTestMessage('Falha ao abrir a conexão WebSocket. Verifique host, porta e credenciais.');
+      },
+      onClose: event => {
+        if (event.code === 1000) {
+          return;
+        }
+
+        setWsTestStatus(prevStatus => {
+          if (prevStatus === 'connecting') {
+            setWsTestMessage('Conexão WebSocket encerrada antes de completar o handshake.');
+            return 'error';
+          }
+
+          return prevStatus;
+        });
+      },
+    });
+
+    if (!socket) {
+      setWsTestStatus('error');
+      setWsTestMessage('Navegador sem suporte a WebSocket ou configuração ausente.');
+      return;
+    }
+
+    wsTestRef.current = socket;
   };
 
   const handleProviderChange = (provider: MapConfiguration['provider']) => {
@@ -272,9 +366,20 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
             type="text"
             value={traccarConfig.baseUrl}
             onChange={(event) => onUpdateTraccarConfig({ baseUrl: event.target.value })}
-            placeholder="https://seu-servidor-traccar/api"
+            placeholder="https://seu-servidor-traccar/api ou ws://seu-servidor:8082"
             className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           />
+          {traccarConfig.baseUrl && (
+            <p className="mt-1 text-xs text-gray-500">
+              Requisições REST usarão
+              {' '}
+              <code className="font-mono">{normalizedTraccarUrls.httpBaseUrl ?? '—'}</code>
+              {' '}e eventos em tempo real usarão
+              {' '}
+              <code className="font-mono">{normalizedTraccarUrls.wsBaseUrl ?? '—'}</code>
+              .
+            </p>
+          )}
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
@@ -316,12 +421,34 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
             {isTestingTraccar ? <LoaderIcon size={16} className="animate-spin" /> : <Wifi size={16} />}
             Testar conexão
           </button>
+          <button
+            type="button"
+            onClick={handleRealtimeTest}
+            className="inline-flex items-center gap-2 px-4 py-2 border border-blue-200 text-blue-600 rounded-lg hover:bg-blue-50"
+            disabled={wsTestStatus === 'connecting'}
+          >
+            {wsTestStatus === 'connecting' ? <LoaderIcon size={16} className="animate-spin" /> : <Wifi size={16} />}
+            Streaming em tempo real
+          </button>
           {traccarResult && (
             <span className={`text-sm ${traccarResult.success ? 'text-green-600' : 'text-red-600'}`}>
               {traccarResult.message}
             </span>
           )}
         </div>
+        {wsTestMessage && (
+          <div
+            className={`text-xs mt-2 ${
+              wsTestStatus === 'success'
+                ? 'text-green-600'
+                : wsTestStatus === 'error'
+                  ? 'text-red-600'
+                  : 'text-gray-600'
+            }`}
+          >
+            {wsTestMessage}
+          </div>
+        )}
       </div>
     </div>
   );

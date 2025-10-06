@@ -61,7 +61,8 @@ function App() {
       return;
     }
 
-    const { password: _password, ...sessionUser } = matchingUser;
+    const { password: authPassword, ...sessionUser } = matchingUser;
+    void authPassword;
     setCurrentUser(sessionUser);
     setLoginError(null);
   };

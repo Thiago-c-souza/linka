@@ -7,6 +7,11 @@ export interface TraccarConfig {
   token?: string;
 }
 
+export interface NormalizedTraccarUrls {
+  httpBaseUrl: string | null;
+  wsBaseUrl: string | null;
+}
+
 export interface TraccarRegistrationPayload {
   vehicle: Vehicle;
   device?: Device;
@@ -23,6 +28,18 @@ export interface TraccarRegistrationResult {
   details?: string;
 }
 
+export interface TraccarStreamHandlers {
+  onOpen?: (event: Event) => void;
+  onClose?: (event: CloseEvent) => void;
+  onError?: (event: Event) => void;
+  onMessage?: (event: MessageEvent<string>) => void;
+  /**
+   * Extra query params that should be appended when opening the socket
+   * (e.g. `{ deviceId: 123 }`). Values will be coerced to strings.
+   */
+  queryParams?: Record<string, string | number | boolean | undefined>;
+}
+
 const DEFAULT_TIMEOUT = 8000;
 
 const encodeBasicAuth = (username: string, password: string) => {
@@ -33,15 +50,63 @@ const encodeBasicAuth = (username: string, password: string) => {
   return btoa(`${username}:${password}`);
 };
 
+export const normalizeBaseUrls = (rawUrl?: string): NormalizedTraccarUrls => {
+  if (!rawUrl) {
+    return { httpBaseUrl: null, wsBaseUrl: null };
+  }
+
+  const trimmed = rawUrl.trim();
+  if (!trimmed) {
+    return { httpBaseUrl: null, wsBaseUrl: null };
+  }
+
+  const withoutTrailingSlash = trimmed.replace(/\/+$/, '');
+  const lower = withoutTrailingSlash.toLowerCase();
+
+  if (lower.startsWith('ws://') || lower.startsWith('wss://')) {
+    const httpProtocol = lower.startsWith('wss://') ? 'https://' : 'http://';
+    const httpBaseUrl = httpProtocol + withoutTrailingSlash.slice(lower.indexOf('://') + 3);
+    return {
+      httpBaseUrl,
+      wsBaseUrl: withoutTrailingSlash,
+    };
+  }
+
+  if (lower.startsWith('http://') || lower.startsWith('https://')) {
+    const wsProtocol = lower.startsWith('https://') ? 'wss://' : 'ws://';
+    const wsBaseUrl = wsProtocol + withoutTrailingSlash.slice(lower.indexOf('://') + 3);
+    return {
+      httpBaseUrl: withoutTrailingSlash,
+      wsBaseUrl,
+    };
+  }
+
+  const assumedHttp = withoutTrailingSlash.includes(':') ? `http://${withoutTrailingSlash}` : `https://${withoutTrailingSlash}`;
+  const assumedWs = assumedHttp.replace(/^http/, 'ws');
+
+  return {
+    httpBaseUrl: assumedHttp,
+    wsBaseUrl: assumedWs,
+  };
+};
+
 export class TraccarService {
   private config: TraccarConfig;
+  private httpBaseUrl: string | null;
+  private wsBaseUrl: string | null;
 
   constructor(config: TraccarConfig) {
     this.config = config;
+    const normalized = normalizeBaseUrls(config.baseUrl);
+    this.httpBaseUrl = normalized.httpBaseUrl;
+    this.wsBaseUrl = normalized.wsBaseUrl;
   }
 
   public updateConfig(config: TraccarConfig) {
     this.config = config;
+    const normalized = normalizeBaseUrls(config.baseUrl);
+    this.httpBaseUrl = normalized.httpBaseUrl;
+    this.wsBaseUrl = normalized.wsBaseUrl;
   }
 
   private buildHeaders(): Headers {
@@ -57,16 +122,19 @@ export class TraccarService {
     return headers;
   }
 
+  private ensureHttpBaseUrl(): asserts this is TraccarService & { httpBaseUrl: string } {
+    if (!this.httpBaseUrl) {
+      throw new Error('Configuração do Traccar incompleta. Defina a URL base nas configurações.');
+    }
+  }
+
   private buildUrl(path: string) {
-    const baseUrl = this.config.baseUrl?.replace(/\/$/, '');
-    return `${baseUrl}${path}`;
+    this.ensureHttpBaseUrl();
+    return `${this.httpBaseUrl}${path}`;
   }
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
-    if (!this.config.baseUrl) {
-      throw new Error('Configuração do Traccar incompleta. Defina a URL base nas configurações.');
-    }
-
+    this.ensureHttpBaseUrl();
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : undefined;
     const timeout = controller
       ? setTimeout(() => controller.abort(), DEFAULT_TIMEOUT)
@@ -97,7 +165,7 @@ export class TraccarService {
   }
 
   public async testConnection(): Promise<TraccarRegistrationResult> {
-    if (!this.config.baseUrl) {
+    if (!this.httpBaseUrl) {
       return {
         success: false,
         message: 'Defina a URL base do Traccar para testar a conexão.',
@@ -122,7 +190,7 @@ export class TraccarService {
   }
 
   public async registerVehicle(payload: TraccarRegistrationPayload): Promise<TraccarRegistrationResult> {
-    if (!this.config.baseUrl) {
+    if (!this.httpBaseUrl) {
       return {
         success: false,
         message: 'Configuração do Traccar não encontrada. Salve as credenciais antes de registrar.',
@@ -198,5 +266,61 @@ export class TraccarService {
         remoteVehicleId,
       };
     }
+  }
+
+  public getNormalizedUrls(): NormalizedTraccarUrls {
+    return {
+      httpBaseUrl: this.httpBaseUrl,
+      wsBaseUrl: this.wsBaseUrl,
+    };
+  }
+
+  public connectToEventsStream(handlers?: TraccarStreamHandlers): WebSocket | null {
+    if (typeof WebSocket === 'undefined') {
+      console.warn('WebSocket API indisponível no ambiente atual.');
+      return null;
+    }
+
+    if (!this.wsBaseUrl) {
+      console.warn('URL base do Traccar ausente. Configure antes de abrir a conexão WS.');
+      return null;
+    }
+
+    const url = new URL(`${this.wsBaseUrl}/api/socket`);
+    const params = new URLSearchParams();
+
+    if (this.config.token) {
+      params.set('token', this.config.token);
+    } else if (this.config.username && this.config.password) {
+      params.set('user', this.config.username);
+      params.set('password', this.config.password);
+    }
+
+    if (handlers?.queryParams) {
+      for (const [key, value] of Object.entries(handlers.queryParams)) {
+        if (value !== undefined && value !== null) {
+          params.set(key, String(value));
+        }
+      }
+    }
+
+    url.search = params.toString();
+
+    const socket = new WebSocket(url.toString());
+
+    if (handlers?.onOpen) {
+      socket.addEventListener('open', handlers.onOpen);
+    }
+    if (handlers?.onClose) {
+      socket.addEventListener('close', handlers.onClose);
+    }
+    if (handlers?.onError) {
+      socket.addEventListener('error', handlers.onError);
+    }
+    if (handlers?.onMessage) {
+      socket.addEventListener('message', handlers.onMessage);
+    }
+
+    return socket;
   }
 }

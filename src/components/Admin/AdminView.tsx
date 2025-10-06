@@ -87,6 +87,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ currentUser, users, onUser
             traccarConfig={fleet.traccarConfig}
             onUpdateTraccarConfig={fleet.updateTraccarConfig}
             onTestTraccarConnection={fleet.testTraccarConnection}
+            onOpenTraccarStream={fleet.openTraccarStream}
           />
         );
       default:

@@ -17,7 +17,13 @@ import {
   mockTrips,
   mockVehicles,
 } from '../data/mockData';
-import { TraccarConfig, TraccarRegistrationResult, TraccarService } from '../services/traccarService';
+import {
+  NormalizedTraccarUrls,
+  TraccarConfig,
+  TraccarRegistrationResult,
+  TraccarService,
+  TraccarStreamHandlers,
+} from '../services/traccarService';
 
 export interface CreateVehicleDeviceInput {
   imei: string;
@@ -75,6 +81,8 @@ export interface FleetStore {
   setMapProvider: (provider: MapConfiguration['provider']) => void;
   updateTraccarConfig: (config: Partial<TraccarConfig>) => void;
   testTraccarConnection: () => Promise<TraccarRegistrationResult>;
+  openTraccarStream: (handlers?: TraccarStreamHandlers) => WebSocket | null;
+  getTraccarBaseUrls: () => NormalizedTraccarUrls;
   pendingAlerts: number;
 }
 
@@ -333,6 +341,16 @@ export const useFleetStore = (): FleetStore => {
     }
   }, [traccarService]);
 
+  const openTraccarStream = useCallback(
+    (handlers?: TraccarStreamHandlers) => traccarService.connectToEventsStream(handlers),
+    [traccarService],
+  );
+
+  const getTraccarBaseUrls = useCallback(
+    (): NormalizedTraccarUrls => traccarService.getNormalizedUrls(),
+    [traccarService],
+  );
+
   const pendingAlerts = useMemo(() => alerts.filter(alert => !alert.acknowledged).length, [alerts]);
 
   return {
@@ -355,6 +373,8 @@ export const useFleetStore = (): FleetStore => {
     setMapProvider,
     updateTraccarConfig,
     testTraccarConnection,
+    openTraccarStream,
+    getTraccarBaseUrls,
     pendingAlerts,
   };
 };
