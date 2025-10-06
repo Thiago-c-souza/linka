@@ -19,14 +19,16 @@ import { EquipmentRegistration } from '../Equipment/EquipmentRegistration';
 import { AdminSettings } from './AdminSettings';
 import { UserHierarchyManager } from './UserHierarchyManager';
 import { AuthUser, SessionUser } from '../../types/auth';
+import { FleetStore } from '../../hooks/useFleetStore';
 
 interface AdminViewProps {
   currentUser: SessionUser;
   users: AuthUser[];
   onUsersChange: (users: AuthUser[]) => void;
+  fleet: FleetStore;
 }
 
-export const AdminView: React.FC<AdminViewProps> = ({ currentUser, users, onUsersChange }) => {
+export const AdminView: React.FC<AdminViewProps> = ({ currentUser, users, onUsersChange, fleet }) => {
   const [activeTab, setActiveTab] = useState('clients');
 
   const tabs = [
@@ -56,7 +58,16 @@ export const AdminView: React.FC<AdminViewProps> = ({ currentUser, users, onUser
       case 'equipment':
         return <EquipmentRegistration />;
       case 'vehicles':
-        return <VehiclesManagement />;
+        return (
+          <VehiclesManagement
+            vehicles={fleet.vehicles}
+            devices={fleet.devices}
+            drivers={fleet.drivers}
+            onCreateVehicle={fleet.createVehicle}
+            onDeleteVehicle={fleet.deleteVehicle}
+            traccarConfig={fleet.traccarConfig}
+          />
+        );
       case 'devices':
         return <DevicesManagement />;
       case 'drivers':
@@ -66,7 +77,19 @@ export const AdminView: React.FC<AdminViewProps> = ({ currentUser, users, onUser
       case 'reports':
         return <AdminReports />;
       case 'settings':
-        return <AdminSettings />;
+        return (
+          <AdminSettings
+            mapConfig={fleet.mapConfig}
+            onSaveMapKey={fleet.saveMapApiKey}
+            onClearMapKey={fleet.clearMapApiKey}
+            onUpdateMapSettings={fleet.updateMapSettings}
+            onSetMapProvider={fleet.setMapProvider}
+            traccarConfig={fleet.traccarConfig}
+            onUpdateTraccarConfig={fleet.updateTraccarConfig}
+            onTestTraccarConnection={fleet.testTraccarConnection}
+            onOpenTraccarStream={fleet.openTraccarStream}
+          />
+        );
       default:
         return <ClientsManagement />;
     }

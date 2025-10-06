@@ -2,22 +2,37 @@ import React, { useState } from 'react';
 import { StatsCard } from './StatsCard';
 import { FleetMap } from './FleetMap';
 import { RecentAlerts } from './RecentAlerts';
-import { Truck, Users, AlertTriangle, TrendingUp, Fuel, Clock } from 'lucide-react';
-import { Device, Alert, Vehicle } from '../../types';
+import { Truck, Users, AlertTriangle, TrendingUp, Fuel, Clock, Wrench } from 'lucide-react';
+import { Device, Alert, Vehicle, Driver, MapConfiguration } from '../../types';
 
 interface DashboardViewProps {
   devices: Device[];
   alerts: Alert[];
   vehicles?: Vehicle[];
+  drivers: Driver[];
+  mapConfig: MapConfiguration;
 }
 
-export const DashboardView: React.FC<DashboardViewProps> = ({ devices, alerts, vehicles = [] }) => {
+export const DashboardView: React.FC<DashboardViewProps> = ({ devices, alerts, vehicles = [], drivers, mapConfig }) => {
   const [selectedDevice, setSelectedDevice] = useState<string>();
-  
+
   const onlineDevices = devices.filter(d => d.status === 'online').length;
   const movingDevices = devices.filter(d => d.position?.ignition && d.position?.speed > 5).length;
   const criticalAlerts = alerts.filter(a => a.severity === 'critical' && !a.acknowledged).length;
-  const avgScore = Math.round(devices.reduce((acc, d) => acc + (Math.random() * 100), 0) / devices.length);
+  const avgScore = drivers.length
+    ? Math.round(drivers.reduce((acc, driver) => acc + driver.score, 0) / drivers.length)
+    : 0;
+  const maintenanceVehicles = vehicles.filter(vehicle => vehicle.status === 'maintenance').length;
+  const maintenanceWindowVehicles = vehicles.filter(vehicle => vehicle.nextMaintenance - vehicle.odometer <= 2000).length;
+  const totalFleetOdometer = vehicles.reduce((accumulator, vehicle) => accumulator + vehicle.odometer, 0);
+  const devicesReportingFuel = devices.filter(device => device.position?.fuel !== undefined);
+  const avgFuelLevel = devicesReportingFuel.length
+    ? Math.round(
+        devicesReportingFuel.reduce((accumulator, device) => accumulator + (device.position?.fuel ?? 0), 0) /
+          devicesReportingFuel.length,
+      )
+    : null;
+  const alertsToday = alerts.filter(alert => new Date(alert.timestamp).toDateString() === new Date().toDateString()).length;
 
   return (
     <div className="space-y-4 sm:space-y-6">
@@ -46,7 +61,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ devices, alerts, v
         <StatsCard
           title="Alertas Críticos"
           value={criticalAlerts}
-          subtitle="Requerem atenção"
+          subtitle={`${alertsToday} gerados hoje`}
           icon={AlertTriangle}
           trend={{ value: -12, isPositive: true }}
           color={criticalAlerts > 0 ? "red" : "green"}
@@ -59,6 +74,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ devices, alerts, v
           trend={{ value: 3, isPositive: true }}
           color="green"
         />
+        <StatsCard
+          title="Em manutenção"
+          value={maintenanceVehicles}
+          subtitle="Veículos fora de operação"
+          icon={Wrench}
+          color={maintenanceVehicles > 0 ? 'yellow' : 'green'}
+        />
       </div>
 
       {/* Map and Alerts Grid */}
@@ -69,6 +91,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ devices, alerts, v
             vehicles={vehicles}
             selectedDevice={selectedDevice}
             onDeviceSelect={setSelectedDevice}
+            mapConfig={mapConfig}
           />
         </div>
         <div>
@@ -79,26 +102,24 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ devices, alerts, v
       {/* Additional Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-6">
         <StatsCard
-          title="Consumo de Combustível"
-          value="2.847 L"
-          subtitle="Últimas 24h"
+          title="Nível médio de combustível"
+          value={avgFuelLevel !== null ? `${avgFuelLevel}%` : 'N/A'}
+          subtitle="Veículos com telemetria ativa"
           icon={Fuel}
-          trend={{ value: -8, isPositive: true }}
-          color="blue"
+          color={avgFuelLevel !== null ? 'blue' : 'gray'}
         />
         <StatsCard
-          title="Tempo de Viagem"
-          value="156h 32m"
-          subtitle="Esta semana"
+          title="Próximas manutenções"
+          value={maintenanceWindowVehicles}
+          subtitle="A menos de 2.000 km da revisão"
           icon={Clock}
-          color="green"
+          color={maintenanceWindowVehicles > 0 ? 'yellow' : 'green'}
         />
         <StatsCard
-          title="Distância Total"
-          value="12.847 km"
-          subtitle="Este mês"
+          title="Quilometragem acumulada"
+          value={`${totalFleetOdometer.toLocaleString()} km`}
+          subtitle="Somatório do odômetro da frota"
           icon={TrendingUp}
-          trend={{ value: 15, isPositive: true }}
           color="blue"
         />
       </div>

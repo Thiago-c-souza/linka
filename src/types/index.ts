@@ -152,4 +152,7 @@ export interface Vehicle {
   nextMaintenance: number;
   photo?: string; // URL or base64 of vehicle photo
   vehicleType?: 'car' | 'truck' | 'motorcycle' | 'machine';
+  clientId?: string;
+  color?: string;
+  chassisNumber?: string;
 }

@@ -1,43 +1,87 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Loader } from '@googlemaps/js-api-loader';
-import { 
-  ZoomIn, 
-  ZoomOut, 
-  RotateCcw, 
-  Maximize, 
-  Layers, 
-  Filter,
-  MapPin,
-  Navigation,
-  Circle,
-  Square,
-  Eye,
-  EyeOff
-} from 'lucide-react';
-import { Device } from '../../types';
+import { ZoomIn, ZoomOut, RotateCcw, Navigation, Circle, Square } from 'lucide-react';
+import { Device, Geofence, MapConfiguration, Vehicle } from '../../types';
 import { createVehicleIcon, getVehicleTypeFromDevice, getVehiclePhotoFromDevice } from '../../utils/vehicleIcons';
 
 interface GoogleMapsIntegrationProps {
   apiKey: string;
-  onApiKeyChange: (apiKey: string) => void;
   devices: Device[];
-  vehicles?: any[];
+  vehicles?: Vehicle[];
+  settings?: MapConfiguration['settings'];
+  geofences?: Geofence[];
 }
 
 export const GoogleMapsIntegration: React.FC<GoogleMapsIntegrationProps> = ({
   apiKey,
   devices,
-  vehicles = []
+  vehicles = [],
+  settings,
+  geofences = [],
 }) => {
   const mapRef = useRef<HTMLDivElement>(null);
   const [map, setMap] = useState<google.maps.Map | null>(null);
   const [selectedDevice, setSelectedDevice] = useState<string>();
-  const [mapStyle, setMapStyle] = useState<'roadmap' | 'satellite' | 'terrain'>('roadmap');
+  const [mapStyle, setMapStyle] = useState<'roadmap' | 'satellite' | 'terrain'>(
+    settings?.enableSatellite ? 'satellite' : settings?.enableTerrain ? 'terrain' : 'roadmap',
+  );
   const [showOfflineDevices, setShowOfflineDevices] = useState(true);
   const [showGeofences, setShowGeofences] = useState(true);
-  const [showTraffic, setShowTraffic] = useState(false);
+  const [showTraffic, setShowTraffic] = useState(settings?.enableTraffic ?? false);
   const markersRef = useRef<google.maps.Marker[]>([]);
   const trafficLayerRef = useRef<google.maps.TrafficLayer | null>(null);
+  const geofenceOverlaysRef = useRef<Array<google.maps.Polygon | google.maps.Circle>>([]);
+
+  const clearGeofenceOverlays = () => {
+    geofenceOverlaysRef.current.forEach(overlay => overlay.setMap(null));
+    geofenceOverlaysRef.current = [];
+  };
+
+  const renderGeofences = (mapInstance: google.maps.Map) => {
+    clearGeofenceOverlays();
+
+    if (!showGeofences) {
+      return;
+    }
+
+    geofences
+      .filter(geofence => geofence.isActive)
+      .forEach((geofence, index) => {
+        const palette = ['#2563eb', '#16a34a', '#f97316', '#db2777'];
+        const color = palette[index % palette.length];
+
+        if (geofence.type === 'circle' && geofence.coordinates.length > 0 && geofence.radius) {
+          const [lat, lon] = geofence.coordinates[0];
+          const circle = new google.maps.Circle({
+            center: { lat, lng: lon },
+            radius: geofence.radius,
+            strokeColor: color,
+            strokeOpacity: 0.7,
+            strokeWeight: 2,
+            fillColor: color,
+            fillOpacity: 0.1,
+            map: mapInstance,
+          });
+
+          geofenceOverlaysRef.current.push(circle);
+          return;
+        }
+
+        if (geofence.type === 'polygon' && geofence.coordinates.length > 2) {
+          const polygon = new google.maps.Polygon({
+            paths: geofence.coordinates.map(([lat, lon]) => ({ lat, lng: lon })),
+            strokeColor: color,
+            strokeOpacity: 0.8,
+            strokeWeight: 2,
+            fillColor: color,
+            fillOpacity: 0.12,
+            map: mapInstance,
+          });
+
+          geofenceOverlaysRef.current.push(polygon);
+        }
+      });
+  };
 
   const initializeMap = async () => {
     if (!apiKey || !mapRef.current) return;
@@ -54,7 +98,12 @@ export const GoogleMapsIntegration: React.FC<GoogleMapsIntegrationProps> = ({
       const mapInstance = new google.maps.Map(mapRef.current, {
         center: { lat: -16.6799, lng: -49.255 },
         zoom: 12,
-        mapTypeId: google.maps.MapTypeId.ROADMAP,
+        mapTypeId:
+          mapStyle === 'satellite'
+            ? google.maps.MapTypeId.SATELLITE
+            : mapStyle === 'terrain'
+              ? google.maps.MapTypeId.TERRAIN
+              : google.maps.MapTypeId.ROADMAP,
         styles: [
           {
             featureType: 'poi',
@@ -70,6 +119,13 @@ export const GoogleMapsIntegration: React.FC<GoogleMapsIntegrationProps> = ({
 
       setMap(mapInstance);
       addDeviceMarkers(mapInstance);
+
+      if (settings?.enableTraffic) {
+        trafficLayerRef.current = new google.maps.TrafficLayer();
+        trafficLayerRef.current.setMap(mapInstance);
+      }
+
+      renderGeofences(mapInstance);
     } catch (err) {
       console.error('Error initializing map:', err);
     }
@@ -213,13 +269,34 @@ export const GoogleMapsIntegration: React.FC<GoogleMapsIntegrationProps> = ({
 
   useEffect(() => {
     initializeMap();
-  }, [apiKey]);
+  }, [apiKey, mapStyle]);
+
+  useEffect(() => {
+    if (!map) {
+      return;
+    }
+    if (settings?.enableTraffic && !showTraffic) {
+      toggleTraffic();
+    }
+  }, [map, settings?.enableTraffic]);
 
   useEffect(() => {
     if (map) {
       addDeviceMarkers(map);
     }
   }, [map, devices, showOfflineDevices, selectedDevice]);
+
+  useEffect(() => {
+    if (map) {
+      renderGeofences(map);
+    }
+  }, [geofences, map, showGeofences]);
+
+  useEffect(() => {
+    return () => {
+      clearGeofenceOverlays();
+    };
+  }, []);
 
   const getStatusColor = (device: Device) => {
     if (device.status === 'offline') return 'text-gray-400';

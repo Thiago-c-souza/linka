@@ -1,3 +1,4 @@
+
 import React, { useEffect, useMemo, useState } from 'react';
 import { Sidebar } from './components/Layout/Sidebar';
 import { Header } from './components/Layout/Header';
@@ -11,17 +12,9 @@ import { SettingsView } from './components/Settings/SettingsView';
 import { AdminView } from './components/Admin/AdminView';
 import { FleetMapView } from './components/Map/FleetMapView';
 import { LoginView } from './components/Auth/LoginView';
-import {
-  mockDevices,
-  mockDrivers,
-  mockVehicles,
-  mockTrips,
-  mockAlerts,
-  mockGeofences,
-} from './data/mockData';
 import { mockAuthUsers } from './data/authUsers';
-import { Alert } from './types';
 import { AuthRole, AuthUser, LoginCredentials, SessionUser } from './types/auth';
+import { useFleetStore } from './hooks/useFleetStore';
 
 const viewPermissions: Record<AuthRole, string[]> = {
   super_admin: ['dashboard', 'map', 'vehicles', 'drivers', 'geofences', 'alerts', 'trips', 'admin', 'settings'],
@@ -32,10 +25,10 @@ const viewPermissions: Record<AuthRole, string[]> = {
 function App() {
   const [activeView, setActiveView] = useState('dashboard');
   const [isCollapsed, setIsCollapsed] = useState(false);
-  const [alerts, setAlerts] = useState<Alert[]>(mockAlerts);
   const [authUsers, setAuthUsers] = useState<AuthUser[]>(mockAuthUsers);
   const [currentUser, setCurrentUser] = useState<SessionUser | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
+  const fleet = useFleetStore();
 
   // Simulate real-time updates
   useEffect(() => {
@@ -58,11 +51,6 @@ function App() {
     }
   }, [currentUser, activeView]);
 
-  const pendingAlerts = useMemo(
-    () => alerts.filter(alert => !alert.acknowledged).length,
-    [alerts],
-  );
-
   const handleLogin = ({ email, password }: LoginCredentials) => {
     const normalizedEmail = email.trim().toLowerCase();
     const matchingUser = authUsers.find(
@@ -74,7 +62,8 @@ function App() {
       return;
     }
 
-    const { password: _password, ...sessionUser } = matchingUser;
+    const { password: authPassword, ...sessionUser } = matchingUser;
+    void authPassword;
     setCurrentUser(sessionUser);
     setLoginError(null);
   };
@@ -86,18 +75,11 @@ function App() {
   };
 
   const handleAcknowledgeAlert = (alertId: string) => {
-    setAlerts(prev =>
-      prev.map(alert =>
-        alert.id === alertId
-          ? {
-              ...alert,
-              acknowledged: true,
-              acknowledgedBy: currentUser?.name ?? 'Usuário',
-              acknowledgedAt: new Date().toISOString(),
-            }
-          : alert,
-      ),
-    );
+    if (!currentUser) {
+      return;
+    }
+
+    fleet.acknowledgeAlert(alertId, currentUser.name);
   };
 
   const renderView = () => {
@@ -107,13 +89,23 @@ function App() {
 
     switch (activeView) {
       case 'dashboard':
-        return <DashboardView devices={mockDevices} alerts={alerts} vehicles={mockVehicles} />;
+        return (
+          <DashboardView
+            devices={fleet.devices}
+            alerts={fleet.alerts}
+            vehicles={fleet.vehicles}
+            drivers={fleet.drivers}
+            mapConfig={fleet.mapConfig}
+          />
+        );
       case 'map':
         return (
           <FleetMapView
-            devices={mockDevices}
-            drivers={mockDrivers}
-            vehicles={mockVehicles}
+            devices={fleet.devices}
+            drivers={fleet.drivers}
+            vehicles={fleet.vehicles}
+            mapConfig={fleet.mapConfig}
+            geofences={fleet.geofences}
             onNavigateToAdmin={() => {
               if (viewPermissions[currentUser.role].includes('admin')) {
                 setActiveView('admin');
@@ -122,15 +114,21 @@ function App() {
           />
         );
       case 'vehicles':
-        return <VehiclesList devices={mockDevices} vehicles={mockVehicles} drivers={mockDrivers} />;
+        return (
+          <VehiclesList
+            devices={fleet.devices}
+            vehicles={fleet.vehicles}
+            drivers={fleet.drivers}
+          />
+        );
       case 'drivers':
-        return <DriversView drivers={mockDrivers} devices={mockDevices} />;
+        return <DriversView drivers={fleet.drivers} devices={fleet.devices} />;
       case 'geofences':
-        return <GeofencesView geofences={mockGeofences} />;
+        return <GeofencesView geofences={fleet.geofences} />;
       case 'alerts':
-        return <AlertsView alerts={alerts} onAcknowledgeAlert={handleAcknowledgeAlert} />;
+        return <AlertsView alerts={fleet.alerts} onAcknowledgeAlert={handleAcknowledgeAlert} />;
       case 'trips':
-        return <TripsView trips={mockTrips} drivers={mockDrivers} vehicles={mockVehicles} />;
+        return <TripsView trips={fleet.trips} drivers={fleet.drivers} vehicles={fleet.vehicles} />;
       case 'admin':
         if (currentUser.role === 'child_user') {
           return (
@@ -148,12 +146,21 @@ function App() {
             currentUser={currentUser}
             users={authUsers}
             onUsersChange={setAuthUsers}
+            fleet={fleet}
           />
         );
       case 'settings':
         return <SettingsView />;
       default:
-        return <DashboardView devices={mockDevices} alerts={alerts} vehicles={mockVehicles} />;
+        return (
+          <DashboardView
+            devices={fleet.devices}
+            alerts={fleet.alerts}
+            vehicles={fleet.vehicles}
+            drivers={fleet.drivers}
+            mapConfig={fleet.mapConfig}
+          />
+        );
     }
   };
 
@@ -174,7 +181,7 @@ function App() {
       />
 
       <div className="flex-1 flex flex-col min-w-0">
-        <Header user={currentUser} alertCount={pendingAlerts} onLogout={handleLogout} />
+        <Header user={currentUser} alertCount={fleet.pendingAlerts} onLogout={handleLogout} />
 
         <main className="flex-1 p-3 sm:p-6 overflow-auto">{renderView()}</main>
       </div>
